@@ -290,10 +290,10 @@ router.post('/insert', function(req, res, next) {
     MongoClient.connect(url, function(err, db) {
         assert.equal(null, err);
         try {
+            var _id = req.body._id.toLowerCase();
+			var _idEnc = encodeID(_id);
             if (!req.body.json || req.body.json==''){
-				var _id = req.body._id.toLowerCase();
-				var _idEnc = encodeID(_id);
-                db.collection('phrase').remove({
+				db.collection('phrase').remove({
                     _id: _idEnc
                 }, {}, function(err) {
                     db.close();
@@ -311,8 +311,10 @@ router.post('/insert', function(req, res, next) {
 				jEnc[_idEnc] = j[Object.keys(j)[0]];
                 var p = JSON.parse(req.body.phrases.toLowerCase());
                 db.collection('phrase').save({
+                    //_id: _id,
                     _id: _idEnc,
                     phrases: p,
+                    //json: j
                     json: jEnc
                 }, {}, function(err, doc) {
                     db.close();
