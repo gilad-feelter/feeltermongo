@@ -103,7 +103,7 @@ router.get('/', function(req, res, next) {
 
 // encode dots (.) & dollars ($)
 var encodeID = function(_id) {
-	return _id.replace('.', 'P').replace('$', 'D');
+	return _id.replace(/\./g, 'P').replace(/\$/g, 'D');
 }
 
 var getPhrase = function(db, q, req, callback) {
