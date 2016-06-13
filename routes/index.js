@@ -103,7 +103,7 @@ router.get('/', function(req, res, next) {
 
 // encode dots (.) & dollars ($)
 var encodeID = function(_id) {
-	return _id.replace(/\./g, 'P').replace(/\$/g, 'D');
+    return _id.replace(/\./g, 'P').replace(/\$/g, 'D');
 }
 
 var getPhrase = function(db, q, req, callback) {
@@ -124,7 +124,7 @@ var getPhrase = function(db, q, req, callback) {
 //callback(q.replace(new RegExp('&','gi'),'&amp;'));
 //return;
         var ampq=q.replace(new RegExp('&','gi'),'&amp;');
-		var qEnc = encodeID(q);
+        var qEnc = encodeID(q);
         // request from mongo db
         db.collection('phrase', function(err, collection) {
             try {
@@ -151,12 +151,12 @@ var getPhrase = function(db, q, req, callback) {
                                 var j = items[0].json;
                                 var jkp = {};
                                 jkp[q] = j[Object.keys(j)[0]];
-				                var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+                                var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
                                 jkp[q].sourcedb = 'cdn_nosql_v1';
-				                jkp[q].servertime = d;
-				                
+                                jkp[q].servertime = d;
+                                
                                 quota.reportKnown(req.headers.refid, qs);
-				                
+                                
                                 callback(JSON.stringify(jkp) + '');
                             }
                             else {
@@ -187,7 +187,7 @@ var getPhrase = function(db, q, req, callback) {
                                         if (response.body.indexOf('new key phrase queued for research')>-1) quota.reportUnknown(req.headers.refid, q);
                                         else quota.reportKnown(req.headers.refid, q);
                                         
-					                    var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, ''); 
+                                        var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, ''); 
                                         callback(response.body.replace(/,\s"dbid"/, ',"sourcedb":"cdn_mysql_v1","servertime":"'+d+'","dbid"'));
                                     }
                                     catch (e1) {
@@ -226,41 +226,41 @@ var finDocs = function(req, res, next) {
                 }
                 var url_parts = Url.parse(req.url, true);
                 //var query = {_id:{$gt:q}};
-				//var fields = {_id:1};
-				//var options = {limit:10};
-				var query = JSON.parse(url_parts.query.q);
-				var fields = JSON.parse(url_parts.query.f);
-				var options = JSON.parse(url_parts.query.o);
-				db.collection('phrase', function(err, collection) {
-					try {
-						if (err != null) {
-							res.end('Error: collection: ' + err);
-							return;
-						}
-						var cursor = collection.find(query, fields, options);
-						cursor.toArray(function(err, items) {
-							try {
-								if (err != null) {
-									res.end('Error: toArray: ' + err);
-									return;
-								}
-								res.writeHeader(200, {
-									"Content-Type": "text/plain"
-								});
-								res.write(JSON.stringify(items));
-								res.end();
-								db.close();
-								return;
-							}
-							catch (e4) {
-								res.end('Error: 4: ' + e4);
-							}
-						});
-					}
-					catch (e3) {
-						res.end('Error: 3: ' + e3);
-					}
-				});
+                //var fields = {_id:1};
+                //var options = {limit:10};
+                var query = JSON.parse(url_parts.query.q);
+                var fields = JSON.parse(url_parts.query.f);
+                var options = JSON.parse(url_parts.query.o);
+                db.collection('phrase', function(err, collection) {
+                    try {
+                        if (err != null) {
+                            res.end('Error: collection: ' + err);
+                            return;
+                        }
+                        var cursor = collection.find(query, fields, options);
+                        cursor.toArray(function(err, items) {
+                            try {
+                                if (err != null) {
+                                    res.end('Error: toArray: ' + err);
+                                    return;
+                                }
+                                res.writeHeader(200, {
+                                    "Content-Type": "text/plain"
+                                });
+                                res.write(JSON.stringify(items));
+                                res.end();
+                                db.close();
+                                return;
+                            }
+                            catch (e4) {
+                                res.end('Error: 4: ' + e4);
+                            }
+                        });
+                    }
+                    catch (e3) {
+                        res.end('Error: 3: ' + e3);
+                    }
+                });
             }
             catch (e2) {
                 res.end('Error: 2: ' + e2);
@@ -291,10 +291,11 @@ router.post('/insert', function(req, res, next) {
         assert.equal(null, err);
         try {
             var _id = req.body._id.toLowerCase();
-			var _idEnc = encodeID(_id);
+            var _idEnc = encodeID(_id);
             if (!req.body.json || req.body.json==''){
-				db.collection('phrase').remove({
-                    _id: _idEnc
+                db.collection('phrase').remove({ $or:[
+                    {_id: _idEnc}
+                    ,{phrases: _idEnc}]
                 }, {}, function(err) {
                     db.close();
                     if (err == null) {
@@ -307,8 +308,8 @@ router.post('/insert', function(req, res, next) {
             }
             else{
                 var j = JSON.parse(req.body.json);
-				var jEnc = {};
-				jEnc[_idEnc] = j[Object.keys(j)[0]];
+                var jEnc = {};
+                jEnc[_idEnc] = j[Object.keys(j)[0]];
                 var p = JSON.parse(req.body.phrases.toLowerCase());
                 db.collection('phrase').save({
                     //_id: _id,
