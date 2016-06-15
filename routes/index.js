@@ -295,7 +295,7 @@ router.post('/insert', function(req, res, next) {
             if (!req.body.json || req.body.json==''){
                 db.collection('phrase').remove({ $or:[
                     {_id: _idEnc}
-                    ,{phrases: _idEnc}]
+                    ,{phrases: _id}]
                 }, {}, function(err) {
                     db.close();
                     if (err == null) {
