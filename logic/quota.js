@@ -15,7 +15,15 @@ var quota = {
                 body += chunk;
             });
             res.on('end', function() {
-                that.referrers = JSON.parse(body);
+                var r='';
+                try{
+                    r=JSON.parse(body);
+                    that.referrers = r;
+                    console.log("got quta: "+ JSON.stringify(that.referrers));
+                } catch(e){
+                    console.log("Quata response parse error: "+r, e);
+                    setTimeout(that.load,10000);
+                }
                 //console.log(JSON.stringify(that.referrers) + 'this.referrers[ref] '+ that.referrers['188.120.148.189'].state );
             });
         }).on('error', function(e) {

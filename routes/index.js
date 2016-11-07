@@ -22,12 +22,20 @@ router.get('/', function(req, res, next) {
             req.headers.refid=ref_parts.hostname;
         }
         else req.headers.refid = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+	//if (req.headers['host'].indexOf('cdnz.feelter.com')>-1) req.headers.refid=req.headers['host'];
+
+	if(qs[0]=='zzz'){
+//var f=require('fs').readFileSync('/web/feelter/logic/formats.js');
+res.end(JSON.stringify(req.headers));
+return;
+}
         //Quota checks
         if (quota.blockAll(req.headers.refid, qs[0])) {
             res.end('{"' + qs[0] + '": {"no_data": "global Quota exceeded","helper": "","dbid": "-1"}}')
             //res.status(402).end('Quota exceeded');
             return;
         }
+
         var url = 'mongodb://127.0.0.1:27017/feelter';
         MongoClient.connect(url, function(err, db) {
             try {
@@ -56,14 +64,26 @@ router.get('/', function(req, res, next) {
                             if (returned >= expected) {
 
                                 // send response to client
-                                if (req.query.format && (req.query.format.toLowerCase()=='iframe' || req.query.format.toLowerCase()=='html')){
+                                if (req.query.format && (req.query.format.toLowerCase()=='iframe')){
                                     res.writeHeader(200, {
                                         "Content-Type": "text/html"
                                     });
-                                    res.write(formats.tamplates['iframe'][0] + '<script>var local_responseData = [' + resp + '];</script> <div id="preview" style=""><a class="MI_Feelter" mi-keyphrase="'+q+'"></a></div>');
+                                    var sharestring=q;
+                                    res.write(formats.tamplates['iframe'][0].replace('Feelter.com social content analysis.',sharestring).replace('<title>feelter</title>','<title>feelter report - '+q+'</title>') + '<script>var local_responseData = [' + resp + '];</script> <div id="preview" style=""><a class="MI_Feelter" mi-keyphrase="'+q+'"></a></div>');
                                     res.end(formats.tamplates['iframe'][2]);
                                     return;
                                 }
+
+                                
+                                if (req.query.format && req.query.format.toLowerCase()=='html'){
+                                    res.writeHeader(200, {
+                                        "Content-Type": "text/html"
+                                    });
+                                    if(resp.indexOf('"no_data":')>-1) res.end('<script>console.log(\''+resp+'\')</script>');
+                                    else formats.tamplates.html.render( resp ,q,req,res)
+                                    return;
+                                }
+
 
                                 res.writeHeader(200, {
                                     "Content-Type": "text/plain"
@@ -101,14 +121,11 @@ router.get('/', function(req, res, next) {
     }
 });
 
-// encode dots (.) & dollars ($)
-var encodeID = function(_id) {
-    return _id.replace(/\./g, 'P').replace(/\$/g, 'D');
-}
-
 var getPhrase = function(db, q, req, callback) {
     try {
+
         // validation
+
         if (q.length < 4) {
             if (q == '') q = '_';
             var ej = {};
@@ -124,8 +141,8 @@ var getPhrase = function(db, q, req, callback) {
 //callback(q.replace(new RegExp('&','gi'),'&amp;'));
 //return;
         var ampq=q.replace(new RegExp('&','gi'),'&amp;');
-        var qEnc = encodeID(q);
         // request from mongo db
+
         db.collection('phrase', function(err, collection) {
             try {
                 if (err != null) {
@@ -133,7 +150,7 @@ var getPhrase = function(db, q, req, callback) {
                     return;
                 }
                 collection.find({ $or:[
-                  {"_id": qEnc}
+                  {"_id": q}
                   ,{"phrases": ampq}]
                 }, {}, {
                     limit: 1
@@ -151,12 +168,12 @@ var getPhrase = function(db, q, req, callback) {
                                 var j = items[0].json;
                                 var jkp = {};
                                 jkp[q] = j[Object.keys(j)[0]];
-                                var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+				                var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
                                 jkp[q].sourcedb = 'cdn_nosql_v1';
-                                jkp[q].servertime = d;
-                                
+				                jkp[q].servertime = d;
+				                
                                 quota.reportKnown(req.headers.refid, qs);
-                                
+				                
                                 callback(JSON.stringify(jkp) + '');
                             }
                             else {
@@ -187,7 +204,7 @@ var getPhrase = function(db, q, req, callback) {
                                         if (response.body.indexOf('new key phrase queued for research')>-1) quota.reportUnknown(req.headers.refid, q);
                                         else quota.reportKnown(req.headers.refid, q);
                                         
-                                        var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, ''); 
+					                    var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, ''); 
                                         callback(response.body.replace(/,\s"dbid"/, ',"sourcedb":"cdn_mysql_v1","servertime":"'+d+'","dbid"'));
                                     }
                                     catch (e1) {
@@ -211,6 +228,7 @@ var getPhrase = function(db, q, req, callback) {
     }
 }
 
+
 // ====================================== //
 //          find                          //
 // ====================================== //
@@ -226,41 +244,41 @@ var finDocs = function(req, res, next) {
                 }
                 var url_parts = Url.parse(req.url, true);
                 //var query = {_id:{$gt:q}};
-                //var fields = {_id:1};
-                //var options = {limit:10};
-                var query = JSON.parse(url_parts.query.q);
-                var fields = JSON.parse(url_parts.query.f);
-                var options = JSON.parse(url_parts.query.o);
-                db.collection('phrase', function(err, collection) {
-                    try {
-                        if (err != null) {
-                            res.end('Error: collection: ' + err);
-                            return;
-                        }
-                        var cursor = collection.find(query, fields, options);
-                        cursor.toArray(function(err, items) {
-                            try {
-                                if (err != null) {
-                                    res.end('Error: toArray: ' + err);
-                                    return;
-                                }
-                                res.writeHeader(200, {
-                                    "Content-Type": "text/plain"
-                                });
-                                res.write(JSON.stringify(items));
-                                res.end();
-                                db.close();
-                                return;
-                            }
-                            catch (e4) {
-                                res.end('Error: 4: ' + e4);
-                            }
-                        });
-                    }
-                    catch (e3) {
-                        res.end('Error: 3: ' + e3);
-                    }
-                });
+				//var fields = {_id:1};
+				//var options = {limit:10};
+				var query = JSON.parse(url_parts.query.q);
+				var fields = JSON.parse(url_parts.query.f);
+				var options = JSON.parse(url_parts.query.o);
+				db.collection('phrase', function(err, collection) {
+					try {
+						if (err != null) {
+							res.end('Error: collection: ' + err);
+							return;
+						}
+						var cursor = collection.find(query, fields, options);
+						cursor.toArray(function(err, items) {
+							try {
+								if (err != null) {
+									res.end('Error: toArray: ' + err);
+									return;
+								}
+								res.writeHeader(200, {
+									"Content-Type": "text/plain"
+								});
+								res.write(JSON.stringify(items));
+								res.end();
+								db.close();
+								return;
+							}
+							catch (e4) {
+								res.end('Error: 4: ' + e4);
+							}
+						});
+					}
+					catch (e3) {
+						res.end('Error: 3: ' + e3);
+					}
+				});
             }
             catch (e2) {
                 res.end('Error: 2: ' + e2);
@@ -278,6 +296,7 @@ var finDocs = function(req, res, next) {
 router.get('/find', finDocs);
 router.post('/find', finDocs);
 
+
 // ====================================== //
 // upsert data, called from relational db //
 // ====================================== //
@@ -290,12 +309,9 @@ router.post('/insert', function(req, res, next) {
     MongoClient.connect(url, function(err, db) {
         assert.equal(null, err);
         try {
-            var _id = req.body._id.toLowerCase();
-            var _idEnc = encodeID(_id);
             if (!req.body.json || req.body.json==''){
-                db.collection('phrase').remove({ $or:[
-                    {_id: _idEnc}
-                    ,{phrases: _id}]
+                db.collection('phrase').remove({
+                    _id: req.body._id
                 }, {}, function(err) {
                     db.close();
                     if (err == null) {
@@ -308,15 +324,11 @@ router.post('/insert', function(req, res, next) {
             }
             else{
                 var j = JSON.parse(req.body.json);
-                var jEnc = {};
-                jEnc[_idEnc] = j[Object.keys(j)[0]];
                 var p = JSON.parse(req.body.phrases.toLowerCase());
                 db.collection('phrase').save({
-                    //_id: _id,
-                    _id: _idEnc,
+                    _id: req.body._id,
                     phrases: p,
-                    //json: j
-                    json: jEnc
+                    json: j
                 }, {}, function(err, doc) {
                     db.close();
                     if (err == null) {
@@ -335,6 +347,11 @@ router.post('/insert', function(req, res, next) {
     });
 });
 
+
+
+
+
+
 // dummy method, post wong work if no get defined
 
 router.get('/insert', function(req, res, next) {
@@ -342,6 +359,8 @@ router.get('/insert', function(req, res, next) {
     res.write(h);
     res.end(' - dummy');
 });
+
+
 
 // test functions
 
@@ -465,5 +484,6 @@ var searchMentions = function(db, q, callback) {
         //   callback('no records found');
     });
 }
+
 
 module.exports = router;
