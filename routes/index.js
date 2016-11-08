@@ -2,103 +2,117 @@ var express = require('express');
 var router = express.Router();
 var MongoClient = require('mongodb').MongoClient;
 var assert = require('assert');
-var ObjectId = require('mongodb').ObjectID;
 var Url = require('url');
 var frequest = require('request');
 var quota = require('../logic/quota').quota;
 var formats = require('../logic/formats').formats;
 
+var DB_URL = 'mongodb://127.0.0.1:27017/feelter';
+var NEW_PHRASE_MSG = "new key phrase queued for research";
+
 // ====================================== //
 //          cdn - api endpoint            //
 // ====================================== //
 
+// This is the main endpoint where keyphrase data is requested by the client
+// Only GET requests are supported
+// The requested keyphrase is always returned as the key for the corresponding data
 router.get('/', function(req, res, next) {
     try {
-        var url_parts = Url.parse(req.url, true);
-        var aq = url_parts.query.q.trim().trim('|');
-        var qs = aq.split('|');
-        if (req.headers.referer){
-            var ref_parts = Url.parse(req.headers.referer, true);
-            req.headers.refid=ref_parts.hostname;
+        var reqURL = Url.parse(req.url, true);
+        var q = reqURL.query.q.trim().trim('|');
+        var keyphraseList = q.split('|');
+        // extract referer
+        if (req.headers.referer) {
+            var refererURL = Url.parse(req.headers.referer, true);
+            req.headers.refid = refererURL.hostname;
         }
-        else req.headers.refid = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-	//if (req.headers['host'].indexOf('cdnz.feelter.com')>-1) req.headers.refid=req.headers['host'];
-
-	if(qs[0]=='zzz'){
-//var f=require('fs').readFileSync('/web/feelter/logic/formats.js');
-res.end(JSON.stringify(req.headers));
-return;
-}
-        //Quota checks
-        if (quota.blockAll(req.headers.refid, qs[0])) {
-            res.end('{"' + qs[0] + '": {"no_data": "global Quota exceeded","helper": "","dbid": "-1"}}')
+        else {
+            req.headers.refid = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        }
+        // test headers
+        if (keyphraseList[0] == 'zzz') {
+            res.end(JSON.stringify(req.headers));
+            return;
+        }
+        // quota checks
+        if (quota.blockAll(req.headers.refid, keyphraseList[0])) {
+            res.end(buildNoDataMsg(keyphraseList[0], "global Quota exceeded"))
             //res.status(402).end('Quota exceeded');
             return;
         }
-
-        var url = 'mongodb://127.0.0.1:27017/feelter';
-        MongoClient.connect(url, function(err, db) {
+        // connect
+        MongoClient.connect(DB_URL, function(err, db) {
             try {
+                // handle connection errors
                 //assert.equal(null, err);
                 if (err != null) {
                     res.end(err);
                     return;
                 }
+                // init response params
                 var returned = 0;
-                var expected = qs.length;
+                var expected = keyphraseList.length;
                 var resp = '';
-
                 // handle multiple keyphrases in a single request
-
-                for (var i = 0; i < qs.length; i++) {
-                    var q = qs[i];
-                    getPhrase(db, q, req, function(h) {
+                for (var i = 0; i < expected; i++) {
+                    var keyphrase = keyphraseList[i];
+                    getPhrase(db, keyphrase, req, function(kpMsg) {
                         try {
-
-                            if (h != '') {
-                                if (h[0] == '[') h = h.substring(1, h.length - 1);
-                                if (returned < expected - 1) h += ',';
-                                resp += h;
+                            if (kpMsg != '') {
+                                if (kpMsg[0] == '[')
+                                    kpMsg = kpMsg.substring(1, kpMsg.length - 1);
+                                if (returned < expected - 1)
+                                    kpMsg += ',';
+                                resp += kpMsg;
                             }
                             returned++;
-                            if (returned >= expected) {
-
-                                // send response to client
-                                if (req.query.format && (req.query.format.toLowerCase()=='iframe')){
+                            if (returned < expected)
+                                return;
+                            // send response to client
+                            resp = resp.replace(',]', ']');
+                            var fmt = req.query.format;
+                            if (fmt) {
+                                // handle specific formats
+                                fmt = fmt.toLowerCase();
+                                if (fmt == 'iframe') {
                                     res.writeHeader(200, {
                                         "Content-Type": "text/html"
                                     });
-                                    var sharestring=q;
-                                    res.write(formats.tamplates['iframe'][0].replace('Feelter.com social content analysis.',sharestring).replace('<title>feelter</title>','<title>feelter report - '+q+'</title>') + '<script>var local_responseData = [' + resp + '];</script> <div id="preview" style=""><a class="MI_Feelter" mi-keyphrase="'+q+'"></a></div>');
+                                    var sharestring = keyphrase;
+                                    res.write(formats.tamplates['iframe'][0].replace('Feelter.com social content analysis.', sharestring).replace('<title>feelter</title>', '<title>feelter report - ' + keyphrase + '</title>') + '<script>var local_responseData = [' + resp + '];</script> <div id="preview" style=""><a class="MI_Feelter" mi-keyphrase="' + keyphrase + '"></a></div>');
                                     res.end(formats.tamplates['iframe'][2]);
                                     return;
                                 }
-
-                                
-                                if (req.query.format && req.query.format.toLowerCase()=='html'){
+                                if (fmt == 'html') {
                                     res.writeHeader(200, {
                                         "Content-Type": "text/html"
                                     });
-                                    if(resp.indexOf('"no_data":')>-1) res.end('<script>console.log(\''+resp+'\')</script>');
-                                    else formats.tamplates.html.render( resp ,q,req,res)
+                                    if (resp.indexOf('"no_data":') > -1)
+                                        res.end('<script>console.log(\'' + resp + '\')</script>');
+                                    else
+                                        formats.tamplates.html.render(resp, keyphrase, req, res)
                                     return;
                                 }
-
-
-                                res.writeHeader(200, {
-                                    "Content-Type": "text/plain"
-                                });
-                                if (url_parts.query.callback) res.write(url_parts.query.callback + '(');
-
-                                if (resp[0] != '[') res.write('[');
-                                res.write(resp);
-                                if (resp[0] != '[') res.write(']');
-                                resp = resp.replace(',]', ']');
-
-                                if (url_parts.query.callback) res.write(');');
-                                res.end();
-                                db.close();
                             }
+                            // general response format
+                            res.writeHeader(200, {
+                                "Content-Type": "text/plain"
+                            });
+                            // wrap message if necessary
+                            var suf = "";
+                            if (reqURL.query.callback) {
+                                res.write(reqURL.query.callback + '(');
+                                suf = ");";
+                            }
+                            if (resp[0] != '[') {
+                                res.write('[');
+                                suf = "]" + suf;
+                            }
+                            res.write(resp);
+                            res.write(suf);
+                            res.end();
+                            db.close();
                         }
                         catch (e1) {
                             res.end('error ' + e1);
@@ -121,164 +135,242 @@ return;
     }
 });
 
-var getPhrase = function(db, q, req, callback) {
+var getPhrase = function(db, keyphrase, req, callback) {
     try {
-
         // validation
-
-        if (q.length < 4) {
-            if (q == '') q = '_';
+        if (keyphrase.length < 4) {
+            if (keyphrase == '')
+                keyphrase = '_';
             var ej = {};
-            ej[q] = 'no data';
+            ej[keyphrase] = 'no data';
             callback('');
             return;
             //callback(JSON.stringify(ej));
         }
-        q = q.toLowerCase();
-        var h = '';
-        var multi = false;
-        var t = 2;
-//callback(q.replace(new RegExp('&','gi'),'&amp;'));
-//return;
-        var ampq=q.replace(new RegExp('&','gi'),'&amp;');
-        // request from mongo db
-
+        keyphrase = keyphrase.toLowerCase();
+        var kpid = new Buffer(keyphrase).toString('base64');
+        // request phrase collection from mongo db
         db.collection('phrase', function(err, collection) {
             try {
+                // handle collection errors
                 if (err != null) {
                     callback('error1: ' + err);
                     return;
                 }
-                collection.find({ $or:[
-                  {"_id": q}
-                  ,{"phrases": ampq}]
+                // find corresponding document in the collection
+                collection.find({
+                    $or: [{
+                        "_id": kpid
+                    }, {
+                        "phrases": keyphrase//ampq
+                    }]
                 }, {}, {
                     limit: 1
                 }).toArray(
                     function(err, items) {
                         try {
+                            // handle toArray errors
                             if (err != null) {
                                 callback('error2: ' + err);
                                 return;
                             }
                             if (items.length > 0 && !req.query.shard) {
-
                                 // data available on mongo db
-
                                 var j = items[0].json;
-                                var jkp = {};
-                                jkp[q] = j[Object.keys(j)[0]];
-				                var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-                                jkp[q].sourcedb = 'cdn_nosql_v1';
-				                jkp[q].servertime = d;
-				                
-                                quota.reportKnown(req.headers.refid, qs);
-				                
-                                callback(JSON.stringify(jkp) + '');
+                                var jkp = {}
+                                jkp[keyphrase] = j[Object.keys(j)[0]];
+                                jkp[keyphrase].sourcedb = 'cdn_nosql_v1';
+                                jkp[keyphrase].servertime = getServerTime();
+                                quota.reportKnown(req.headers.refid, keyphrase);
+                                callback(JSON.stringify(jkp));
                             }
                             else {
-                                //Quota checks
-                                if (quota.blockUnknown(req.headers.refid, qs)) {
-                                    callback('{"' + q + '": {"no_data": "new phrase Quota exceeded","helper": "","dbid": "-1"}}');
+                                // quota checks
+                                if (quota.blockUnknown(req.headers.refid, keyphrase)) {
+                                    callback(buildNoDataMsg(keyphrase, "new phrase Quota exceeded"));
                                     return;
                                 }
-
-                                var qs={
-                                        q: q
-                                        ,ref:req.headers.refid
-                                    };
-                                if (req.query.shard) qs.shard = req.query.shard;
-                                //callback(JSON.stringify(qs) + '');return;
+                                // request keyphrase from crawler farm
+                                var qs = {
+                                    q: keyphrase,
+                                    ref: req.headers.refid
+                                };
+                                if (req.query.shard)
+                                    qs.shard = req.query.shard;
                                 frequest({
                                     url: 'http://54.187.35.9',
                                     qs: qs
                                 }, function(err, response, body) {
-                                    q=q.replace(new RegExp('"','gi'),'\\"');
                                     try {
+                                        // handle frequest errors
                                         if (err) {
-                                            callback('{"' + q + '": {"no_data": "new key phrase queued for research","helper": "","dbid": "-1","error4":"' + JSON.stringify(err) + '"}}');
+                                            callback(buildNoDataMsg(keyphrase, NEW_PHRASE_MSG, 4, JSON.stringify(err)));
                                             return;
                                         }
-
                                         // successfull response from sql, TODO: save to mongo
-                                        if (response.body.indexOf('new key phrase queued for research')>-1) quota.reportUnknown(req.headers.refid, q);
-                                        else quota.reportKnown(req.headers.refid, q);
-                                        
-					                    var d=new Date().toISOString().replace(/T/, ' ').replace(/\..+/, ''); 
-                                        callback(response.body.replace(/,\s"dbid"/, ',"sourcedb":"cdn_mysql_v1","servertime":"'+d+'","dbid"'));
+                                        if (response.body.indexOf(NEW_PHRASE_MSG) > -1)
+                                            quota.reportUnknown(req.headers.refid, keyphrase);
+                                        else
+                                            quota.reportKnown(req.headers.refid, keyphrase);
+                                        callback(response.body.replace(/,\s"dbid"/, ',"sourcedb":"cdn_mysql_v1","servertime":"' + getServerTime() + '","dbid"'));
                                     }
                                     catch (e1) {
-                                        callback('{"' + q + '": {"no_data": "new key phrase queued for research","helper": "","dbid": "-1","error5":"' + JSON.stringify(e1) + '"}}');
+                                        callback(buildNoDataMsg(keyphrase, NEW_PHRASE_MSG, 5, JSON.stringify(e1)));
                                     }
                                 });
                             }
                         }
                         catch (e2) {
-                            callback('{"' + q + '": {"no_data": "new key phrase queued for research","helper": "","dbid": "-1","error6":"' + e2.message + '"}}');
+                            callback(buildNoDataMsg(keyphrase, NEW_PHRASE_MSG, 6, e2.message));
                         }
                     });
             }
             catch (e3) {
-                callback('{"' + q + '": {"no_data": "new key phrase queued for research","helper": "","dbid": "-1","error7":"' + JSON.stringify(e3) + '"}}');
+                callback(buildNoDataMsg(keyphrase, NEW_PHRASE_MSG, 7, JSON.stringify(e3)));
             }
         });
     }
     catch (e4) {
-        callback('{"' + q + '": {"no_data": "new key phrase queued for research","helper": "","dbid": "-1","error8":"' + JSON.stringify(e4) + '"}}');
+        callback(buildNoDataMsg(keyphrase, NEW_PHRASE_MSG, 8, JSON.stringify(e4)));
     }
+}
+
+// Get the current server time as a formatted string
+var getServerTime = function() {
+    return new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+}
+
+// Build the no_data message from the specified params
+var buildNoDataMsg = function(callback, keyphrase, reason, errorId, errorMsg) {
+    var msg = {};
+    msg[keyphrase] = {
+        no_data: reason,
+        helper: "",
+        dbid: "-1",
+    };
+    if (errorMsg !== undefined)
+        msg[keyphrase]["error" + errorId] = JSON.stringify(errorMsg);
+    return JSON.stringify(msg);
 }
 
 
 // ====================================== //
-//          find                          //
+//    upsert data -  crawlers endpoint    //
 // ====================================== //
 
+router.post('/insert', function(req, res, next) {
+    //res.end('canceled');return;
+    var existed = false;
+    MongoClient.connect(DB_URL, function(err, db) {
+        // handle connect errors
+        assert.equal(null, err);
+        try {
+            var keyphrase = req.body._id;
+            // remove data with old id (TODO: remove later - 20/11/16)
+            db.collection('phrase').remove({
+                _id: keyphrase
+            }, {}, function(err) {});
+            // insert or update with the new data
+            var kpid = new Buffer(keyphrase).toString('base64');
+            if (!req.body.json || req.body.json == '') {
+                // delete the document if given empty data
+                db.collection('phrase').remove({
+                    _id: kpid
+                }, {}, function(err) {
+                    db.close();
+                    if (err == null) {
+                        res.end('deleted !');
+                    }
+                    else {
+                        res.end(err.message);
+                    }
+                });
+            }
+            else {
+                // save the new data
+                var j = JSON.parse(req.body.json);
+                var p = JSON.parse(req.body.phrases.toLowerCase());
+                db.collection('phrase').save({
+                    _id: kpid,
+                    phrases: p,
+                    json: j
+                }, {}, function(err, doc) {
+                    db.close();
+                    if (err == null)
+                        res.end(doc == 1 ? 'updated' : 'saved !');
+                    else
+                        res.end(err.message);
+                });
+            }
+        }
+        catch (e) {
+            res.end('err: ' + e.message);
+            db.close();
+        }
+    });
+});
+
+// dummy method - post won't work if no get defined
+router.get('/insert', function(req, res, next) {
+    var msg = 'form data:' + JSON.stringify(req.body);
+    res.write(msg);
+    res.end(' - dummy');
+});
+
+
+// ====================================== //
+//          Misc                          //
+// ====================================== //
+
+// Perform free form queries to the mongo db
 var finDocs = function(req, res, next) {
     try {
-        var url = 'mongodb://127.0.0.1:27017/feelter';
-        MongoClient.connect(url, function(err, db) {
+        MongoClient.connect(DB_URL, function(err, db) {
             try {
+                // handle connect errors
                 if (err != null) {
                     res.end('Error: connect: ' + err);
                     return;
                 }
-                var url_parts = Url.parse(req.url, true);
+                var reqURL = Url.parse(req.url, true);
                 //var query = {_id:{$gt:q}};
-				//var fields = {_id:1};
-				//var options = {limit:10};
-				var query = JSON.parse(url_parts.query.q);
-				var fields = JSON.parse(url_parts.query.f);
-				var options = JSON.parse(url_parts.query.o);
-				db.collection('phrase', function(err, collection) {
-					try {
-						if (err != null) {
-							res.end('Error: collection: ' + err);
-							return;
-						}
-						var cursor = collection.find(query, fields, options);
-						cursor.toArray(function(err, items) {
-							try {
-								if (err != null) {
-									res.end('Error: toArray: ' + err);
-									return;
-								}
-								res.writeHeader(200, {
-									"Content-Type": "text/plain"
-								});
-								res.write(JSON.stringify(items));
-								res.end();
-								db.close();
-								return;
-							}
-							catch (e4) {
-								res.end('Error: 4: ' + e4);
-							}
-						});
-					}
-					catch (e3) {
-						res.end('Error: 3: ' + e3);
-					}
-				});
+                //var fields = {_id:1};
+                //var options = {limit:10};
+                var query = JSON.parse(reqURL.query.q);
+                var fields = JSON.parse(reqURL.query.f);
+                var options = JSON.parse(reqURL.query.o);
+                db.collection('phrase', function(err, collection) {
+                    try {
+                        // handle collection errors
+                        if (err != null) {
+                            res.end('Error: collection: ' + err);
+                            return;
+                        }
+                        // perform the query
+                        var cursor = collection.find(query, fields, options);
+                        cursor.toArray(function(err, items) {
+                            try {
+                                if (err != null) {
+                                    res.end('Error: toArray: ' + err);
+                                    return;
+                                }
+                                res.writeHeader(200, {
+                                    "Content-Type": "text/plain"
+                                });
+                                res.write(JSON.stringify(items));
+                                res.end();
+                                db.close();
+                                return;
+                            }
+                            catch (e4) {
+                                res.end('Error: 4: ' + e4);
+                            }
+                        });
+                    }
+                    catch (e3) {
+                        res.end('Error: 3: ' + e3);
+                    }
+                });
             }
             catch (e2) {
                 res.end('Error: 2: ' + e2);
@@ -292,198 +384,132 @@ var finDocs = function(req, res, next) {
         return;
     }
 };
-
 router.get('/find', finDocs);
 router.post('/find', finDocs);
 
-
-// ====================================== //
-// upsert data, called from relational db //
-// ====================================== //
-
-router.post('/insert', function(req, res, next) {
-   // res.end('canceled');
-    //return;
-    var existed = false;
-    var url = 'mongodb://127.0.0.1:27017/feelter';
-    MongoClient.connect(url, function(err, db) {
-        assert.equal(null, err);
-        try {
-            if (!req.body.json || req.body.json==''){
-                db.collection('phrase').remove({
-                    _id: req.body._id
-                }, {}, function(err) {
-                    db.close();
-                    if (err == null) {
-                        res.end('deleted !');
-                    }
-                    else {
-                        res.end(err.message);
-                    }
-                });
-            }
-            else{
-                var j = JSON.parse(req.body.json);
-                var p = JSON.parse(req.body.phrases.toLowerCase());
-                db.collection('phrase').save({
-                    _id: req.body._id,
-                    phrases: p,
-                    json: j
-                }, {}, function(err, doc) {
-                    db.close();
-                    if (err == null) {
-                        res.end(doc == 1 ? 'updated' : 'saved !');
-                    }
-                    else {
-                        res.end(err.message);
-                    }
-                });
-            }
-        }
-        catch (e) {
-            res.end('err: ' + e.message);
-            db.close();
-        }
-    });
-});
-
-
-
-
-
-
-// dummy method, post wong work if no get defined
-
-router.get('/insert', function(req, res, next) {
-    var h = 'form data:' + JSON.stringify(req.body); //.data;
-    res.write(h);
-    res.end(' - dummy');
-});
-
-
-
-// test functions
-
+// Test - return request body itself
 router.get('/test', function(req, res, next) {
-    var h = 'form data:' + JSON.stringify(req.body); //.data;
-    res.write(h);
+    var msg = 'form data:' + JSON.stringify(req.body);
+    res.write(msg);
     res.end(' - dummy');
 });
 
+// Home - count mentions
 router.get('/home', function(req, res, next) {
-
-    var url = 'mongodb://127.0.0.1:27017/feelter';
-    MongoClient.connect(url, function(err, db) {
+    MongoClient.connect(DB_URL, function(err, db) {
         assert.equal(null, err);
-        findMentions(db, function(h) {
-            //res.render('index', { title: h });
+        countDocuments(db, function(msg) {
+            //res.render('index', { title: msg });
             res.writeHeader(200, {
                 "Content-Type": "text/html"
             });
-            res.write(h + ' count');
+            res.write(msg + ' count');
             res.end();
             db.close();
         });
     });
 });
-var findMentions = function(db, callback) {
-    var h = '';
+var countDocuments = function(db, callback) {
+    var msg = '';
     var multi = false;
-    //callback('ccc');
     db.collection('phrase').count(function(error, nbDocs) {
-        h = 'count: ' + nbDocs;
-        h += '<form method="post" action="search"><input name="data"/><input type="submit/></form>';
-        callback(h);
+        msg = 'count: ' + nbDocs;
+        msg += '<form method="post" action="search"><input name="data"/><input type="submit/></form>';
+        callback(msg);
     });
-
-
 }
 
+// search for mentions
 router.get('/search', function(req, res, next) {
-    var url = 'mongodb://127.0.0.1:27017/feelter';
-    MongoClient.connect(url, function(err, db) {
+    MongoClient.connect(DB_URL, function(err, db) {
         assert.equal(null, err);
-        var url_parts = Url.parse(req.url, true);
-        var q = url_parts.query.q;
-        searchMentions(db, q, function(h) {
+        var reqURL = Url.parse(req.url, true);
+        var q = reqURL.query.q;
+        searchMentions(db, q, function(data) {
             //res.writeHeader(200, {
-            //"Content-Type": "text/html"
+            //    "Content-Type": "text/html"
             //});
-            res.write(url_parts.query.callback + '(' + h + ')');
+            res.write(reqURL.query.callback + '(' + data + ')');
             res.end();
             db.close();
         });
     });
 });
 var searchMentions = function(db, q, callback) {
-    var h = '';
+    var resp = '';
     var multi = false;
-    var t = 2;
-    var trimmedq = false;
-    var find = {
+    // build the query object
+    var query = {
         _id: {
             '$regex': q
-        }
-        //,"$where":"this._id.length <= "+(q.length+10)
+        },
+        //"$where": "this._id.length <= " + (q.length + 10)
     }
-    if (q.indexOf(' ') > -1) {
-        var trimmedq = q.substring(0, q.indexOf(' ')).trim();
-        find['$text'] = {
-            "$search": '' + trimmedq + ''
+    // free text search of first word
+    var spaceIndex = q.indexOf(' ');
+    if (spaceIndex > -1) {
+        var firstWord = q.substring(0, spaceIndex).trim();
+        query['$text'] = {
+            "$search": '' + firstWord + ''
         };
-        //h=trimmedq;
     }
-
+    // find fields
+    var fields = {
+        phrases: 1,
+        //_id:1,
+        score: {
+            $meta: "textScore"
+        }
+    };
+    // find options
+    var options = {
+        limit: 500
+    };
+    // sort by
+    var sortBy = {
+        score: {
+            $meta: "textScore"
+        }
+    };
+    // get the phrase collection
     db.collection('phrase', function(err, collection) {
-        collection.find(find, {
-                phrases: 1,
-                //_id:1,
-                score: {
-                    $meta: "textScore"
+        // find the required documents
+        collection.find(query, fields, options).sort(sortBy).toArray(function(err, items) {
+            //callback(items.length);return;
+            // handle find errors
+            if (err != null) {
+                callback(err);
+                return;
+            }
+            // sort
+            items.sort(function(a, b) {
+                return a._id.length - b._id.length;
+            });
+            items.sort(function(a, b) {
+                return b.phrases.length - a.phrases.length
+            });
+            // build response
+            for (var i = 0; i < Math.min(20, items.length); i++) {
+                if (items[i]._id.length > q.length + 20)
+                    continue;
+                if (resp != '') {
+                    multi = true;
+                    resp += ',';
                 }
-            }, {
-                limit: 500
-            })
-            .sort({
-                score: {
-                    $meta: "textScore"
-                }
-            })
-            .toArray(
-                function(err, items) {
-                    //       callback(items.length);return;
-                    if (err != null) {
-                        callback(err);
-                        return;
-                    }
-                    items.sort(function(a, b) {
-                        return a._id.length - b._id.length
-                    });
-                    items.sort(function(a, b) {
-                        return b.phrases.length - a.phrases.length
-                    });
-                    for (var i = 0; i < Math.min(20, items.length); i++) {
-                        if (items[i]._id.length > q.length + 20) continue;
-                        if (h != '') {
-                            multi = true;
-                            h += ',';
-                        }
-                        //delete items[i].phrases;
-                        h += JSON.stringify({
-                            label: items[i]._id,
-                            category: 'cat'
-                        });
-                    }
-                    //if (multi) 
-                    h = '[' + h + ']';
-                    callback(h);
-                    return;
-
+                //delete items[i].phrases;
+                resp += JSON.stringify({
+                    label: items[i]._id,
+                    category: 'cat'
                 });
-
-        //   callback('no records found');
+            }
+            //if (multi) 
+            resp = '[' + resp + ']';
+            callback(resp);
+            return;
+        });
+        //callback('no records found');
     });
 }
 
-
+/*-*/
 module.exports = router;
