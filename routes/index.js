@@ -212,7 +212,7 @@ var getPhrase = function(db, keyphrase, req, callback) {
                                             quota.reportUnknown(req.headers.refid, keyphrase);
                                         else
                                             quota.reportKnown(req.headers.refid, keyphrase);
-                                        callback(response.body.replace(/,\s"dbid"/, ',"sourcedb":"cdn_mysql_v1","servertime":"' + getServerTime() + '","dbid"'));
+                                        callback(response.body.replace(/,\s*"dbid"/, ',"sourcedb":"cdn_mysql_v1","servertime":"' + getServerTime() + '","dbid"'));
                                     }
                                     catch (e1) {
                                         callback(buildNoDataMsg(keyphrase, NEW_PHRASE_MSG, 5, JSON.stringify(e1)));
